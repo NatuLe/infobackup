@@ -18,73 +18,107 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
 import interactions
-# Use the following method to import the internal module in the current same directory
-from . import internal_t
-# Import the os module to get the parent path to the local files
-import os
-# aiofiles module is recommended for file operation
-import aiofiles
-# You can listen to the interactions.py event
-from interactions.api.events import MessageCreate
-# You can create a background task
-from interactions import Task, IntervalTrigger
+from interactions import Task, IntervalTrigger,listen
+import sqlite3
+from interactions.ext.paginators import Paginator
 
-'''
-Replace the ModuleName with any name you'd like
-'''
-class ModuleName(interactions.Extension):
+
+class ServerinfoBackup(interactions.Extension):
     module_base: interactions.SlashCommand = interactions.SlashCommand(
-        name="replace_your_command_base_here",
-        description="Replace here for the base command descriptions"
+        name="show",
+        description=" "
     )
-    module_group: interactions.SlashCommand = module_base.group(
-        name="replace_your_command_group_here",
-        description="Replace here for the group command descriptions"
-    )
+    
+    def __init__(self,bot):
+        self.bot=bot 
+        self.guild_id=1181895594265030776
+        self.off_role_id=1181914967746818099
+        self.tem_role_id=1181915800727199744
+        self.dm_id=1247786071387930626
+        self.admin_id=1082957596039848006
+        # initiate the db for storing off_role members'ids and tem_roles'
+        
+        self.create_tables()
 
-    @module_group.subcommand("ping", sub_cmd_description="Replace the description of this command")
+    @module_base.subcommand("ping", sub_cmd_description="ping me")
     @interactions.slash_option(
         name = "option_name",
         description = "Option description",
         required = True,
         opt_type = interactions.OptionType.STRING
     )
-    async def module_group_ping(self, ctx: interactions.SlashContext, option_name: str):
+    async def ping(self, ctx: interactions.SlashContext, option_name: str):
         await ctx.send(f"Pong {option_name}!")
-        internal_t.internal_t_testfunc()
+    
 
-    @module_base.subcommand("pong", sub_cmd_description="Replace the description of this command")
-    @interactions.slash_option(
-        name = "option_name",
-        description = "Option description",
-        required = True,
-        opt_type = interactions.OptionType.STRING
-    )
-    async def module_group_pong(self, ctx: interactions.SlashContext, option_name: str):
-        # The local file path is inside the directory of the module's main script file
-        async with aiofiles.open(f"{os.path.dirname(__file__)}/example_file.txt") as afp:
-            file_content: str = await afp.read()
-        await ctx.send(f"Pong {option_name}!\nFile content: {file_content}")
-        internal_t.internal_t_testfunc()
+    @module_base.subcommand("official_members",sub_cmd_description="show the official member list at last check! ")
+    async def offi_members(self,ctx:interactions.SlashContext):
+        if ctx.author_id!=self.admin_id:
+            await ctx.send("You are not authorized to use this command!",ephemeral=True)
+            return
+        with sqlite3.connect('backup.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT member_id FROM off_role_members')
+            off_role_member_id_list=cursor.fetchall()
+            off_role_member_name_list=[(await self.bot.fetch_user(mid[0])).mention for mid in off_role_member_id_list]
+            off_role_member_name_str=", ".join(off_role_member_name_list)
+            paginator=Paginator.create_from_string(self.bot,content=f"The official members at last check are: {off_role_member_name_str}")
+            await paginator.send(ctx)
 
-    @interactions.listen(MessageCreate)
-    async def on_messagecreate(self, event: MessageCreate):
-        '''
-        Event listener when a new message is created
-        '''
-        print(f"User {event.message.author.display_name} sent '{event.message.content}'")
+    @module_base.subcommand("temporary_members",sub_cmd_description="show the temporary member list at last check! ")
+    async def tem_members(self,ctx:interactions.SlashContext):
+        if ctx.author_id!=self.admin_id:
+            await ctx.send("You are not authorized to use this command!",ephemeral=True)
+        with sqlite3.connect('backup.db') as conn:  
+            cursor = conn.cursor()
+            cursor.execute('SELECT member_id FROM tem_role_members')
+            tem_role_member_id_list=cursor.fetchall()
+            tem_role_member_name_list=[(await self.bot.fetch_user(mid[0])).mention for mid in tem_role_member_id_list]
+            tem_role_member_name_str=", ".join(tem_role_member_name_list)
+            paginator=Paginator.create_from_string(self.bot,content=f"The temporary members at last check are: {tem_role_member_name_str}")
+            await paginator.send(ctx)
+    
 
-    # You can even create a background task to run as you wish.
-    # Refer to https://interactions-py.github.io/interactions.py/Guides/40%20Tasks/ for guides
-    # Refer to https://interactions-py.github.io/interactions.py/API%20Reference/API%20Reference/models/Internal/tasks/ for detailed APIs
-    @Task.create(IntervalTrigger(minutes=1))
-    async def task_everyminute(self):
-        channel: interactions.TYPE_MESSAGEABLE_CHANNEL = self.bot.get_guild(1234567890).get_channel(1234567890)
-        await channel.send("Background task send every one minute")
-        print("Background Task send every one minute")
+    @listen(interactions.events.MessageCreate)
+    async def start_backing_up(self,message):
+        if not self.backing_up.running:
+            await self.backing_up.start()
+            return
 
-    # The command to start the task
-    @module_base.subcommand("start_task", sub_cmd_description="Start the background task")
-    async def module_base_starttask(self, ctx: interactions.SlashContext):
-        self.task_everyminute.start()
-        await ctx.send("Task started")
+    @Task.create(IntervalTrigger(hours=12))
+    async def backing_up(self):
+        guild=self.bot.get_guild(self.guild_id)
+        try:
+            off_role=await guild.fetch_role(self.off_role_id)
+            tem_role=await guild.fetch_role(self.tem_role_id)
+            off_role_member_id_list=[member.id for member in off_role.members]
+            tem_role_member_id_list=[member.id for member in tem_role.members]
+
+            # store into date base
+            with sqlite3.connect('backup.db') as conn:
+                cursor = conn.cursor()
+                # Clear old data
+                cursor.execute('DELETE FROM off_role_members')
+                cursor.execute('DELETE FROM tem_role_members')
+                    
+                # Insert new data
+                cursor.executemany('INSERT INTO off_role_members (member_id) VALUES (?)', [(mid,) for mid in off_role_member_id_list])
+                cursor.executemany('INSERT INTO tem_role_members (member_id) VALUES (?)', [(mid,) for mid in tem_role_member_id_list])
+                conn.commit()
+        except:
+            channel=await self.bot.fetch_channel(self.dm_id)
+            embed=interactions.Embed(description="Role deleted!Pleaze Check!",color=interactions.Color.r)
+            await channel.send(embed=embed) 
+
+        
+
+    def create_tables(self):
+        with sqlite3.connect('backup.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute('''CREATE TABLE IF NOT EXISTS off_role_members (
+                                id INTEGER PRIMARY KEY,
+                                member_id INTEGER)''')
+            cursor.execute('''CREATE TABLE IF NOT EXISTS tem_role_members (
+                                id INTEGER PRIMARY KEY,
+                                member_id INTEGER)''')
+            conn.commit()
